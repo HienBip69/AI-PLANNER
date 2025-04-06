@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><title>Email Task Bot</title></head>
+<body>
+    <h1>Đăng nhập Email</h1>
+    {% if error %}
+        <p style="color: red;">{{ error }}</p>
+    {% endif %}
+    <form method="post" action="/login">
+        <input type="email" name="email" placeholder="Email" required><br>
+        <input type="password" name="password" placeholder="Mật khẩu" required><br>
+        <input type="submit" value="Đăng nhập">
+    </form>
+</body>
+</html>

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>Dashboard</title></head>
+<body>
+    <h1>Kế hoạch và Giải pháp</h1>
+    {% if plans %}
+        <ul>
+        {% for plan in plans %}
+            <li>
+                <strong>Tiêu đề:</strong> {{ plan.title }}<br>
+                <strong>Hạn chót:</strong> {{ plan.deadline }}<br>
+                <strong>Mô tả:</strong> {{ plan.description }}<br>
+                <strong>Kế hoạch:</strong> <pre>{{ plan.plan }}</pre>
+            </li>
+        {% endfor %}
+        </ul>
+    {% else %}
+        <p>Không có email mới hoặc task hợp lệ. Gửi email với "due YYYY-MM-DD" để thử.</p>
+    {% endif %}
+</body>
+</html>
