@@ -150,7 +150,7 @@ def check_emails_periodically():
         except Exception as e:
             print(f"[{datetime.now()}] Lỗi trong quá trình kiểm tra email: {str(e)}")
         
-        time.sleep(60)
+        time.sleep(30)
 
 # Google Calendar
 def get_calendar_service():
