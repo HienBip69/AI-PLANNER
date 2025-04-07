@@ -14,7 +14,7 @@ import pickle
 
 app = Flask(__name__, template_folder='templates')
 app.secret_key = os.environ.get('SECRET_KEY', 'mysecretkey123')
-OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', 'your_openrouter_api_key_here')
+OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', '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')
 
 # Biến toàn cục
 email_credentials = {"email": "", "password": ""}
