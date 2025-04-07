@@ -4,13 +4,16 @@ import time
 import threading
 import imaplib
 import email
+import smtplib
+from email.mime.text import MIMEText
 from datetime import datetime, timedelta
-from flask import Flask, request, render_template, redirect, url_for, session
+from flask import Flask, request, render_template, redirect, url_for, session, Response
 import requests
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 import pickle
+from queue import Queue
 
 app = Flask(__name__, template_folder='templates')
 app.secret_key = os.environ.get('SECRET_KEY', 'mysecretkey123')
@@ -19,6 +22,7 @@ OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', 'sk-or-v1-e21fdb99c80b
 # Biến toàn cục
 email_credentials = {"email": "", "password": ""}
 planned_tasks = []
+message_queue = Queue()  # Hàng đợi để lưu thông báo
 
 # Hàm đọc email qua IMAP
 def get_emails(email_user, email_pass):
@@ -41,6 +45,7 @@ def get_emails(email_user, email_pass):
             msg = email.message_from_bytes(raw_email)
             subject = msg["Subject"]
             body = ""
+            sender = msg["From"]
             if msg.is_multipart():
                 for part in msg.walk():
                     if part.get_content_type() == "text/plain":
@@ -50,6 +55,7 @@ def get_emails(email_user, email_pass):
                 body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
             task = analyze_email(subject, body)
             if task:
+                task["sender"] = sender
                 tasks.append(task)
         mail.logout()
         print(f"[{datetime.now()}] Tìm thấy {len(tasks)} email hợp lệ.")
@@ -57,18 +63,14 @@ def get_emails(email_user, email_pass):
     except Exception as e:
         raise Exception(f"Lỗi khi đọc email: {str(e)}")
 
-# Phân tích email để tìm deadline với định dạng DD-MM-YYYY
+# Phân tích email
 def analyze_email(subject, body):
     task = {"title": subject, "deadline": None, "description": body}
-    # Tìm định dạng "due DD-MM-YYYY" hoặc "due DD/MM/YYYY"
     deadline_match = re.search(r'due (\d{2}-\d{2}-\d{4})|due (\d{2}/\d{2}/\d{4})', body, re.IGNORECASE)
     if deadline_match:
-        # Lấy nhóm khớp đầu tiên không phải None
         deadline = deadline_match.group(1) or deadline_match.group(2)
-        # Chuẩn hóa định dạng về DD-MM-YYYY
-        deadline = deadline.replace('/', '-')  
+        deadline = deadline.replace('/', '-')
         try:
-            # Kiểm tra tính hợp lệ của ngày
             datetime.strptime(deadline, "%d-%m-%Y")
             task["deadline"] = deadline
         except ValueError:
@@ -76,7 +78,32 @@ def analyze_email(subject, body):
             return None
     return task if task["deadline"] else None
 
-# Gọi OpenRouter API để lập kế hoạch và ước lượng thời gian
+# Gửi email phản hồi
+def send_response_email(to_email, task):
+    try:
+        msg = MIMEText(
+            f"Xin chào,\n\n"
+            f"Chúng tôi đã nhận được nhiệm vụ của bạn: '{task['title']}' với hạn chót {task['deadline']}.\n"
+            f"Dưới đây là kế hoạch chi tiết:\n"
+            f"- Tổng thời gian: {task['total_hours']} giờ\n"
+            f"- Thời gian mỗi ngày: {task['hours_per_day']} giờ\n"
+            f"- Số ngày làm: {task['days']} ngày\n"
+            f"- Kế hoạch: {task['plan']}\n\n"
+            f"Nhiệm vụ đã được thêm vào Google Calendar. Vui lòng kiểm tra!\n\n"
+            f"Trân trọng,\nHệ thống AI Lập Kế Hoạch"
+        )
+        msg['Subject'] = f"Phản hồi: Kế hoạch cho '{task['title']}'"
+        msg['From'] = email_credentials["email"]
+        msg['To'] = to_email
+
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(email_credentials["email"], email_credentials["password"])
+            server.send_message(msg)
+        print(f"[{datetime.now()}] Đã gửi email phản hồi tới {to_email}")
+    except Exception as e:
+        print(f"[{datetime.now()}] Lỗi khi gửi email phản hồi: {str(e)}")
+
+# Gọi OpenRouter API
 def ai_plan_and_solve(tasks):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -89,7 +116,7 @@ def ai_plan_and_solve(tasks):
         deadline_date = datetime.strptime(task["deadline"], "%d-%m-%Y")
         days_until_deadline = (deadline_date - datetime.now()).days
         if days_until_deadline < 1:
-            days_until_deadline = 1  # Đảm bảo ít nhất 1 ngày
+            days_until_deadline = 1
 
         prompt = (
             f"Tạo kế hoạch chi tiết cho nhiệm vụ này:\n"
@@ -107,24 +134,27 @@ def ai_plan_and_solve(tasks):
             response.raise_for_status()
             plan = response.json()["choices"][0]["message"]["content"]
             
-            total_hours = extract_total_hours(plan) or 8  # Mặc định 8 giờ nếu không tìm thấy
+            total_hours = extract_total_hours(plan) or 8
             hours_per_day = total_hours / days_until_deadline
 
-            planned_tasks.append({
+            planned_task = {
                 "title": task["title"],
                 "deadline": task["deadline"],
                 "description": task["description"],
                 "plan": plan,
                 "total_hours": total_hours,
                 "hours_per_day": round(hours_per_day, 2),
-                "days": days_until_deadline
-            })
-            add_task_to_calendar(planned_tasks[-1])  # Thêm vào Google Calendar
+                "days": days_until_deadline,
+                "sender": task["sender"]
+            }
+            planned_tasks.append(planned_task)
+            add_task_to_calendar(planned_task)
+            send_response_email(task["sender"], planned_task)
         except Exception as e:
             print(f"[{datetime.now()}] Lỗi khi gọi OpenRouter: {str(e)}")
     return planned_tasks
 
-# Hàm trích xuất tổng giờ từ plan
+# Trích xuất tổng giờ
 def extract_total_hours(plan):
     match = re.search(r'tổng thời gian.*?(\d+\.?\d*) giờ', plan, re.IGNORECASE)
     return float(match.group(1)) if match else None
@@ -139,18 +169,21 @@ def check_emails_periodically():
             continue
         
         try:
+            message_queue.put("Bot đang đọc email...")  # Thông báo khi bắt đầu đọc
             tasks = get_emails(email_credentials["email"], email_credentials["password"])
             if tasks:
                 print(f"[{datetime.now()}] Đã tìm thấy {len(tasks)} email mới.")
                 new_planned_tasks = ai_plan_and_solve(tasks)
                 if new_planned_tasks:
                     planned_tasks = new_planned_tasks
+                message_queue.put(f"Đã xử lý xong {len(tasks)} email.")
             else:
-                print(f"[{datetime.now()}] Không có email mới hoặc nhiệm vụ hợp lệ.")
+                message_queue.put("Không có email mới hoặc nhiệm vụ hợp lệ.")
         except Exception as e:
+            message_queue.put(f"Lỗi: {str(e)}")
             print(f"[{datetime.now()}] Lỗi trong quá trình kiểm tra email: {str(e)}")
         
-        time.sleep(30)
+        time.sleep(60)
 
 # Google Calendar
 def get_calendar_service():
@@ -183,13 +216,24 @@ def add_task_to_calendar(task):
                     f"Tổng thời gian: {task['total_hours']} giờ\n"
                     f"Số ngày làm: {task['days']} ngày"
                 ),
-                'start': {'date': event_date.strftime("%Y-%m-%d")},  # Google Calendar cần YYYY-MM-DD
+                'start': {'date': event_date.strftime("%Y-%m-%d")},
                 'end': {'date': event_date.strftime("%Y-%m-%d")}
             }
             service.events().insert(calendarId='primary', body=event).execute()
         print(f"[{datetime.now()}] Đã thêm nhiệm vụ '{task['title']}' vào Google Calendar.")
     except Exception as e:
         print(f"[{datetime.now()}] Lỗi khi thêm vào Google Calendar: {str(e)}")
+
+# Endpoint SSE để gửi thông báo
+@app.route('/stream')
+def stream():
+    def event_stream():
+        while True:
+            if not message_queue.empty():
+                message = message_queue.get()
+                yield f"data: {message}\n\n"
+            time.sleep(1)  # Giảm tải CPU
+    return Response(event_stream(), mimetype="text/event-stream")
 
 # Routes
 @app.route('/')
