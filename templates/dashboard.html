@@ -3,9 +3,18 @@
 <html>
 <head>
     <title>Bảng Điều Khiển</title>
+    <style>
+        #status {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+        }
+    </style>
 </head>
 <body>
     <h1>Các Nhiệm Vụ Đã Lên Kế Hoạch</h1>
+    <div id="status">Đang chờ thông báo...</div>
     {% for plan in plans %}
         <h2>{{ plan.title }}</h2>
         <p><strong>Hạn chót:</strong> {{ plan.deadline }}</p>
@@ -16,5 +25,12 @@
         <p><strong>Số ngày làm:</strong> {{ plan.days }} ngày</p>
         <hr>
     {% endfor %}
+
+    <script>
+        const source = new EventSource('/stream');
+        source.onmessage = function(event) {
+            document.getElementById('status').innerText = event.data;
+        };
+    </script>
 </body>
 </html>
